@@ -32,6 +32,7 @@ export default defineSchema({
 
   researchSessions: defineTable({
     question: v.string(),
+    model: v.optional(v.string()),
     status: v.union(
       v.literal("planning"),
       v.literal("searching"),
@@ -67,7 +68,7 @@ export default defineSchema({
               score: v.number(),
             })
           ),
-          validated: v.boolean(),
+          validated: v.optional(v.boolean()),
         })
       )
     ),
@@ -85,3 +86,4 @@ export default defineSchema({
     createdAt: v.number(),
   }).index("by_created", ["createdAt"]),
 });
+

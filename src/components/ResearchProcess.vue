@@ -16,7 +16,6 @@ interface Passage {
 interface Finding {
   subQuery: string;
   passages: Passage[];
-  validated: boolean;
 }
 
 interface Session {
@@ -32,7 +31,7 @@ function togglePassages(idx: number) {
   expandedPassages.value[idx] = !expandedPassages.value[idx];
 }
 
-const stageOrder = ["planning", "searching", "validating", "synthesizing", "complete"];
+const stageOrder = ["planning", "searching", "synthesizing", "complete"];
 
 const currentIdx = computed(() => stageOrder.indexOf(props.session.status));
 
@@ -52,18 +51,11 @@ const stages = computed(() => [
     done: currentIdx.value > 1,
   },
   {
-    key: "validating",
-    label: "Validating relevance",
-    doneLabel: "Passages verified",
-    active: props.session.status === "validating",
-    done: currentIdx.value > 2,
-  },
-  {
     key: "synthesizing",
     label: "Synthesizing answer",
     doneLabel: "Answer synthesized",
     active: props.session.status === "synthesizing",
-    done: currentIdx.value > 3,
+    done: currentIdx.value > 2,
   },
 ]);
 
@@ -74,7 +66,6 @@ function scorePercent(score: number) {
 
 <template>
   <div class="relative mb-8">
-    <!-- Timeline line -->
     <div class="absolute left-[15px] top-2 bottom-2 w-px bg-[var(--color-border)]"></div>
 
     <div class="space-y-0">
@@ -83,7 +74,6 @@ function scorePercent(score: number) {
         :key="stage.key"
         class="relative pl-10"
       >
-        <!-- Timeline dot -->
         <div class="absolute left-[9px] top-[6px] z-10 flex h-[13px] w-[13px] items-center justify-center rounded-full border-2 border-[var(--color-surface)] bg-[var(--color-canvas)]">
           <template v-if="stage.done">
             <div class="h-2.5 w-2.5 rounded-full bg-[var(--color-success-text)]"></div>
@@ -96,7 +86,6 @@ function scorePercent(score: number) {
           </template>
         </div>
 
-        <!-- Stage header -->
         <div class="pb-5">
           <p
             class="text-sm font-medium"
@@ -144,13 +133,11 @@ function scorePercent(score: number) {
               class="animate-fade-in rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden"
               :style="{ animationDelay: `${qi * 60}ms` }"
             >
-              <!-- Sub-query row -->
               <button
                 @click="togglePassages(qi)"
                 class="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left hover:bg-[var(--color-surface-sunken)] transition-colors"
               >
                 <div class="flex items-center gap-2 min-w-0">
-                  <!-- Status icon -->
                   <div v-if="sq.status === 'searching'" class="h-3 w-3 shrink-0 rounded-full border-[1.5px] border-[var(--color-accent)] border-t-transparent animate-spin" />
                   <svg v-else-if="sq.status === 'found'" width="14" height="14" viewBox="0 0 14 14" class="shrink-0 text-[var(--color-success-text)]">
                     <path d="M4 7l2.5 2.5L10 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
@@ -163,7 +150,6 @@ function scorePercent(score: number) {
                   <p class="truncate text-sm text-[var(--color-text-primary)]">{{ sq.subQuery }}</p>
                 </div>
 
-                <!-- Passage count + chevron -->
                 <div class="flex shrink-0 items-center gap-1.5">
                   <span
                     v-if="session.findings && session.findings[qi]"
@@ -177,7 +163,6 @@ function scorePercent(score: number) {
                 </div>
               </button>
 
-              <!-- Expanded passages -->
               <div
                 v-if="expandedPassages[qi] && session.findings && session.findings[qi]"
                 class="border-t border-[var(--color-border)] bg-[var(--color-canvas)]"
@@ -188,9 +173,7 @@ function scorePercent(score: number) {
                   class="flex gap-3 border-b border-[var(--color-border)] px-3 py-2.5 last:border-b-0"
                 >
                   <div class="shrink-0 pt-0.5">
-                    <div
-                      class="h-1.5 w-8 rounded-full bg-[var(--color-border)] overflow-hidden"
-                    >
+                    <div class="h-1.5 w-8 rounded-full bg-[var(--color-border)] overflow-hidden">
                       <div
                         class="h-full rounded-full bg-[var(--color-success-text)]"
                         :style="{ width: `${scorePercent(p.score)}%` }"
@@ -208,28 +191,6 @@ function scorePercent(score: number) {
                   No passages retrieved
                 </div>
               </div>
-            </div>
-          </div>
-
-          <!-- VALIDATE: summary badges -->
-          <div
-            v-if="stage.key === 'validating' && (stage.active || stage.done) && session.findings"
-            class="mt-3 flex flex-wrap gap-2"
-          >
-            <div
-              v-for="(f, fi) in session.findings"
-              :key="fi"
-              class="animate-fade-in inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium"
-              :class="f.validated
-                ? 'border-[var(--color-success-text)]/20 bg-[var(--color-success)] text-[var(--color-success-text)]'
-                : 'border-[var(--color-warning-text)]/20 bg-[var(--color-warning)] text-[var(--color-warning-text)]'
-              "
-              :style="{ animationDelay: `${fi * 50}ms` }"
-            >
-              <svg v-if="f.validated" width="10" height="10" viewBox="0 0 10 10"><path d="M2.5 5l2 2 3-3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
-              <svg v-else width="10" height="10" viewBox="0 0 10 10"><path d="M5 2.5v3M5 7v.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" /></svg>
-              Q{{ fi + 1 }}: {{ f.passages.length }} passage{{ f.passages.length !== 1 ? 's' : '' }}
-              {{ f.validated ? 'verified' : 'insufficient' }}
             </div>
           </div>
         </div>

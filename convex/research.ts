@@ -1,30 +1,74 @@
 "use node";
 
 import { v } from "convex/values";
-import { action } from "./_generated/server";
+import { internalAction } from "./_generated/server";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import OpenAI from "openai";
 
-export const startResearch = action({
-  args: { question: v.string() },
-  returns: v.id("researchSessions"),
-  handler: async (ctx, args): Promise<Id<"researchSessions">> => {
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+interface ProviderConfig {
+  client: OpenAI;
+  chatModel: string;
+}
 
-    const sessionId = await ctx.runMutation(
-      api.researchSessions.create,
-      { question: args.question }
-    );
+const PROVIDERS: Record<string, () => ProviderConfig> = {
+  "gpt-5.4": () => ({
+    client: new OpenAI({ apiKey: process.env.OPENAI_API_KEY }),
+    chatModel: "gpt-4o-mini",
+  }),
+  "gpt-4o-mini": () => ({
+    client: new OpenAI({ apiKey: process.env.OPENAI_API_KEY }),
+    chatModel: "gpt-4o-mini",
+  }),
+  "claude-opus-4.6": () => ({
+    client: new OpenAI({
+      apiKey: process.env.ANTHROPIC_API_KEY,
+      baseURL: "https://api.anthropic.com/v1/",
+    }),
+    chatModel: "claude-opus-4-6-20250205",
+  }),
+  "claude-sonnet-4.6": () => ({
+    client: new OpenAI({
+      apiKey: process.env.ANTHROPIC_API_KEY,
+      baseURL: "https://api.anthropic.com/v1/",
+    }),
+    chatModel: "claude-sonnet-4-6-20250514",
+  }),
+  "gemini-3.1-pro": () => ({
+    client: new OpenAI({
+      apiKey: process.env.GOOGLE_API_KEY,
+      baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
+    }),
+    chatModel: "gemini-2.5-pro-preview-05-06",
+  }),
+  "deepseek-r1": () => ({
+    client: new OpenAI({
+      apiKey: process.env.DEEPSEEK_API_KEY,
+      baseURL: "https://api.deepseek.com",
+    }),
+    chatModel: "deepseek-reasoner",
+  }),
+};
+
+function getProvider(modelId?: string): ProviderConfig {
+  const factory = PROVIDERS[modelId ?? "gpt-4o-mini"] ?? PROVIDERS["gpt-4o-mini"];
+  return factory();
+}
+
+export const runPipeline = internalAction({
+  args: {
+    sessionId: v.id("researchSessions"),
+    question: v.string(),
+    model: v.optional(v.string()),
+  },
+  returns: v.null(),
+  handler: async (ctx, args): Promise<null> => {
+    const embeddingClient = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const { client: chatClient, chatModel } = getProvider(args.model);
+    const sessionId: Id<"researchSessions"> = args.sessionId;
 
     try {
-      // --- Step 1: Plan ---
-      await ctx.runMutation(api.researchSessions.updateStatus, {
-        sessionId,
-        status: "planning",
-      });
-
-      const plan = await decomposeQuestion(openai, args.question);
+      const plan = await decomposeQuestion(chatClient, chatModel, args.question);
 
       await ctx.runMutation(api.researchSessions.setPlan, {
         sessionId,
@@ -51,7 +95,6 @@ export const startResearch = action({
       type Finding = {
         subQuery: string;
         passages: Passage[];
-        validated: boolean;
       };
 
       const allFindings: Finding[] = [];
@@ -65,7 +108,7 @@ export const startResearch = action({
           status: "searching",
         });
 
-        const queryEmbedding = await getEmbedding(openai, subQuery.subQuery);
+        const queryEmbedding = await getEmbedding(embeddingClient, subQuery.subQuery);
         const results = await ctx.vectorSearch("chunks", "by_embedding", {
           vector: queryEmbedding,
           limit: 6,
@@ -87,13 +130,10 @@ export const startResearch = action({
           }
         }
 
-        const finding = {
+        allFindings.push({
           subQuery: subQuery.subQuery,
           passages,
-          validated: false,
-        };
-
-        allFindings.push(finding);
+        });
 
         await ctx.runMutation(api.researchSessions.updateSubQueryStatus, {
           sessionId,
@@ -107,33 +147,23 @@ export const startResearch = action({
         findings: allFindings,
       });
 
-      // --- Step 3: Validate ---
-      await ctx.runMutation(api.researchSessions.updateStatus, {
-        sessionId,
-        status: "validating",
-      });
-
-      const validatedFindings = await validateFindings(
-        openai,
-        args.question,
-        allFindings
-      );
-
-      await ctx.runMutation(api.researchSessions.setFindings, {
-        sessionId,
-        findings: validatedFindings,
-      });
-
-      // --- Step 4: Synthesize ---
+      // --- Step 3: Synthesize ---
       await ctx.runMutation(api.researchSessions.updateStatus, {
         sessionId,
         status: "synthesizing",
       });
 
       const { answer, sources } = await synthesize(
-        openai,
+        chatClient,
+        chatModel,
         args.question,
-        validatedFindings
+        allFindings,
+        async (partial: string) => {
+          await ctx.runMutation(api.researchSessions.updateAnswer, {
+            sessionId,
+            answer: partial,
+          });
+        }
       );
 
       await ctx.runMutation(api.researchSessions.complete, {
@@ -149,7 +179,7 @@ export const startResearch = action({
       });
     }
 
-    return sessionId;
+    return null;
   },
 });
 
@@ -162,11 +192,12 @@ async function getEmbedding(openai: OpenAI, text: string): Promise<number[]> {
 }
 
 async function decomposeQuestion(
-  openai: OpenAI,
+  client: OpenAI,
+  model: string,
   question: string
 ): Promise<Array<{ subQuery: string; rationale: string }>> {
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
+  const response = await client.chat.completions.create({
+    model,
     temperature: 0.2,
     response_format: { type: "json_object" },
     messages: [
@@ -189,53 +220,9 @@ Rules:
   return parsed.subQueries || [];
 }
 
-async function validateFindings(
-  openai: OpenAI,
-  question: string,
-  findings: Array<{
-    subQuery: string;
-    passages: Array<{
-      content: string;
-      documentName: string;
-      documentId: Id<"documents">;
-      chunkIndex: number;
-      score: number;
-    }>;
-    validated: boolean;
-  }>
-) {
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
-    temperature: 0.1,
-    response_format: { type: "json_object" },
-    messages: [
-      {
-        role: "system",
-        content: `You are a research validator. For each sub-query and its retrieved passages, determine if the passages contain sufficient relevant information to answer that sub-query.
-
-Return JSON: { "validations": [{ "index": 0, "validated": true/false, "reason": "brief explanation" }] }`,
-      },
-      {
-        role: "user",
-        content: `Main question: ${question}\n\nFindings:\n${JSON.stringify(findings.map((f, i) => ({ index: i, subQuery: f.subQuery, passageCount: f.passages.length, topPassages: f.passages.slice(0, 3).map((p) => p.content.slice(0, 200)) })), null, 2)}`,
-      },
-    ],
-  });
-
-  const parsed = JSON.parse(response.choices[0].message.content || "{}");
-  const validations = parsed.validations || [];
-
-  return findings.map((f, i) => {
-    const v = validations.find(
-      (val: { index: number; validated: boolean }) => val.index === i
-    );
-    const validated: boolean = v?.validated ?? f.passages.length > 0;
-    return { ...f, validated };
-  });
-}
-
 async function synthesize(
-  openai: OpenAI,
+  client: OpenAI,
+  model: string,
   question: string,
   findings: Array<{
     subQuery: string;
@@ -246,8 +233,8 @@ async function synthesize(
       chunkIndex: number;
       score: number;
     }>;
-    validated: boolean;
-  }>
+  }>,
+  onPartial: (text: string) => Promise<void>
 ): Promise<{
   answer: string;
   sources: Array<{
@@ -257,52 +244,111 @@ async function synthesize(
     relevance: string;
   }>;
 }> {
+  const allPassages = findings
+    .filter((f) => f.passages.length > 0)
+    .flatMap((f) => f.passages);
+
+  const passageIndex = new Map<string, { passage: typeof allPassages[0]; tag: string }>();
+  let tagCounter = 1;
+  for (const p of allPassages) {
+    const key = `${p.documentName}:${p.chunkIndex}`;
+    if (!passageIndex.has(key)) {
+      const tag = `[${tagCounter}]`;
+      passageIndex.set(key, { passage: p, tag });
+      tagCounter++;
+    }
+  }
+
   const context = findings
-    .filter((f) => f.validated && f.passages.length > 0)
-    .map(
-      (f) =>
-        `## Sub-query: ${f.subQuery}\n${f.passages.map((p) => `[Source: ${p.documentName}] ${p.content}`).join("\n\n")}`
-    )
+    .filter((f) => f.passages.length > 0)
+    .map((f) => {
+      const passageTexts = f.passages.map((p) => {
+        const key = `${p.documentName}:${p.chunkIndex}`;
+        const entry = passageIndex.get(key);
+        const tag = entry?.tag ?? "";
+        return `${tag} (from ${p.documentName}): ${p.content}`;
+      });
+      return `## Sub-query: ${f.subQuery}\n${passageTexts.join("\n\n")}`;
+    })
     .join("\n\n---\n\n");
 
-  const response = await openai.chat.completions.create({
-    model: "gpt-4o-mini",
+  const sourceList = [...passageIndex.entries()]
+    .map(([, { passage, tag }]) => `${tag} = ${passage.documentName}`)
+    .join("\n");
+
+  const stream = await client.chat.completions.create({
+    model,
     temperature: 0.3,
-    response_format: { type: "json_object" },
+    stream: true,
     messages: [
       {
         role: "system",
-        content: `You are an expert research synthesizer. Given a question and validated research findings from internal documents, produce a comprehensive answer.
+        content: `You are an expert research synthesizer. Given a question and numbered research passages from internal documents, produce a comprehensive answer.
 
 CRITICAL RULES:
 - ONLY use information from the provided sources. Never add external knowledge.
-- Cite sources inline using [Source: document name] notation
-- Be precise, factual, and thorough
-
-Return JSON:
-{
-  "answer": "comprehensive answer with inline citations using [Source: name] format",
-  "sources": [{ "documentName": "name", "documentId": "id", "excerpt": "key quote from source", "relevance": "how this source contributed" }]
-}`,
+- Cite sources using the EXACT numbered tags provided, e.g. [1], [2], [3].
+- Place citations immediately after the claim they support.
+- Use DIFFERENT citation numbers to show you draw from multiple passages. Do NOT always use the same one.
+- Be precise, factual, and thorough.
+- Write in clear paragraphs. Use - for lists when appropriate. Do NOT use bold or markdown emphasis.
+- Do NOT wrap in JSON. Write the answer as plain text.`,
       },
       {
         role: "user",
-        content: `Question: ${question}\n\nResearch findings:\n${context}`,
+        content: `Question: ${question}\n\nSource index:\n${sourceList}\n\nResearch passages:\n${context}`,
       },
     ],
   });
 
-  const parsed = JSON.parse(response.choices[0].message.content || "{}");
-  const sources = (parsed.sources || []).map(
-    (s: { documentName: string; documentId: string; excerpt: string; relevance: string }) => ({
-      documentName: s.documentName,
-      documentId: s.documentId as Id<"documents">,
-      excerpt: s.excerpt,
-      relevance: s.relevance,
-    })
-  );
-  return {
-    answer: parsed.answer || "Unable to synthesize an answer from available sources.",
-    sources,
-  };
+  let answer = "";
+  let lastFlush = 0;
+  const FLUSH_INTERVAL = 300;
+
+  for await (const chunk of stream) {
+    const delta = chunk.choices[0]?.delta?.content;
+    if (delta) {
+      answer += delta;
+      const now = Date.now();
+      if (now - lastFlush > FLUSH_INTERVAL) {
+        await onPartial(answer);
+        lastFlush = now;
+      }
+    }
+  }
+
+  await onPartial(answer);
+
+  if (!answer.trim()) {
+    answer = "Unable to synthesize an answer from available sources.";
+  }
+
+  const citedTags = new Set<number>();
+  const citeRegex = /\[(\d+)\]/g;
+  let match;
+  while ((match = citeRegex.exec(answer)) !== null) {
+    citedTags.add(parseInt(match[1]));
+  }
+
+  const sources: Array<{
+    documentName: string;
+    documentId: Id<"documents">;
+    excerpt: string;
+    relevance: string;
+  }> = [];
+
+  let sourceIdx = 1;
+  for (const [, { passage }] of passageIndex) {
+    if (citedTags.has(sourceIdx)) {
+      sources.push({
+        documentName: passage.documentName,
+        documentId: passage.documentId,
+        excerpt: passage.content.slice(0, 250),
+        relevance: `Passage ${passage.chunkIndex + 1} from ${passage.documentName}`,
+      });
+    }
+    sourceIdx++;
+  }
+
+  return { answer, sources };
 }

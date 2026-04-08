@@ -99,9 +99,9 @@ export const parsePdf = action({
     if (!blob) throw new Error("File not found in storage");
 
     const arrayBuffer = await blob.arrayBuffer();
-    const { PDFParse } = await import("pdf-parse");
-    const pdf = new PDFParse({ data: new Uint8Array(arrayBuffer) });
-    const result = await pdf.getText();
-    return result.text;
+    const { extractText, getDocumentProxy } = await import("unpdf");
+    const pdf = await getDocumentProxy(new Uint8Array(arrayBuffer));
+    const { text } = await extractText(pdf, { mergePages: true });
+    return text as string;
   },
 });

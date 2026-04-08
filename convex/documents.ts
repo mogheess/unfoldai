@@ -65,11 +65,10 @@ export const updateStatus = mutation({
   },
   returns: v.null(),
   handler: async (ctx, args) => {
-    const updates: Record<string, unknown> = { status: args.status };
-    if (args.chunkCount !== undefined) {
-      updates.chunkCount = args.chunkCount;
-    }
-    await ctx.db.patch(args.documentId, updates);
+    await ctx.db.patch(args.documentId, {
+      status: args.status,
+      ...(args.chunkCount !== undefined && { chunkCount: args.chunkCount }),
+    });
     return null;
   },
 });
