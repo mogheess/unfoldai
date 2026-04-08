@@ -4,3 +4,14 @@ dist
 .env.local
 *.local
 .DS_Store
+
+# Convex generated
+convex/_generated
+
+# IDE / tooling
+.agents
+.claude
+AGENTS.md
+CLAUDE.md
+skills-lock.json
+.cursor

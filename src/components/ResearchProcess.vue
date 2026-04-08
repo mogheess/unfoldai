@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref } from "vue";
 
 interface SubQuery {
   subQuery: string;
@@ -7,289 +7,231 @@ interface SubQuery {
   status: "pending" | "searching" | "found" | "insufficient";
 }
 
+interface Passage {
+  content: string;
+  documentName: string;
+  score: number;
+}
+
+interface Finding {
+  subQuery: string;
+  passages: Passage[];
+  validated: boolean;
+}
+
 interface Session {
   status: string;
   plan?: SubQuery[];
-  findings?: Array<{
-    subQuery: string;
-    passages: Array<{
-      content: string;
-      documentName: string;
-      score: number;
-    }>;
-    validated: boolean;
-  }>;
+  findings?: Finding[];
 }
 
 const props = defineProps<{ session: Session }>();
 
-const stages = computed(() => {
-  const s = props.session.status;
-  const stageOrder = [
-    "planning",
-    "searching",
-    "validating",
-    "synthesizing",
-    "complete",
-  ];
-  const currentIdx = stageOrder.indexOf(s);
+const expandedPassages = ref<Record<number, boolean>>({});
+function togglePassages(idx: number) {
+  expandedPassages.value[idx] = !expandedPassages.value[idx];
+}
 
-  return [
-    {
-      key: "planning",
-      label: "Research Plan",
-      description: "Breaking question into targeted sub-queries",
-      active: s === "planning",
-      done: currentIdx > 0,
-    },
-    {
-      key: "searching",
-      label: "Document Search",
-      description: "Semantic search across knowledge base",
-      active: s === "searching",
-      done: currentIdx > 1,
-    },
-    {
-      key: "validating",
-      label: "Quality Control",
-      description: "Verifying passage relevance and sufficiency",
-      active: s === "validating",
-      done: currentIdx > 2,
-    },
-    {
-      key: "synthesizing",
-      label: "Synthesis",
-      description: "Combining findings into a comprehensive answer",
-      active: s === "synthesizing",
-      done: currentIdx > 3,
-    },
-  ];
-});
+const stageOrder = ["planning", "searching", "validating", "synthesizing", "complete"];
 
-const subQueryStatusConfig: Record<
-  string,
-  { icon: string; classes: string }
-> = {
-  pending: {
-    icon: "circle",
-    classes: "text-[var(--color-text-tertiary)]",
+const currentIdx = computed(() => stageOrder.indexOf(props.session.status));
+
+const stages = computed(() => [
+  {
+    key: "planning",
+    label: "Decomposing question",
+    doneLabel: "Decomposed into sub-queries",
+    active: props.session.status === "planning",
+    done: currentIdx.value > 0,
   },
-  searching: {
-    icon: "spinner",
-    classes: "text-[var(--color-accent-text)]",
+  {
+    key: "searching",
+    label: "Searching knowledge base",
+    doneLabel: "Retrieved relevant passages",
+    active: props.session.status === "searching",
+    done: currentIdx.value > 1,
   },
-  found: {
-    icon: "check",
-    classes: "text-[var(--color-success-text)]",
+  {
+    key: "validating",
+    label: "Validating relevance",
+    doneLabel: "Passages verified",
+    active: props.session.status === "validating",
+    done: currentIdx.value > 2,
   },
-  insufficient: {
-    icon: "warning",
-    classes: "text-[var(--color-warning-text)]",
+  {
+    key: "synthesizing",
+    label: "Synthesizing answer",
+    doneLabel: "Answer synthesized",
+    active: props.session.status === "synthesizing",
+    done: currentIdx.value > 3,
   },
-};
+]);
+
+function scorePercent(score: number) {
+  return Math.round(Math.min(score, 1) * 100);
+}
 </script>
 
 <template>
-  <div class="space-y-1 mb-6">
-    <div
-      v-for="(stage, i) in stages"
-      :key="stage.key"
-      class="animate-fade-in-up overflow-hidden"
-      :style="{ animationDelay: `${i * 80}ms` }"
-    >
-      <!-- Stage header -->
+  <div class="relative mb-8">
+    <!-- Timeline line -->
+    <div class="absolute left-[15px] top-2 bottom-2 w-px bg-[var(--color-border)]"></div>
+
+    <div class="space-y-0">
       <div
-        class="flex items-center gap-3 p-3 rounded-lg transition-colors duration-300"
-        :class="
-          stage.active
-            ? 'bg-[var(--color-accent-light)]'
-            : stage.done
-              ? 'bg-[var(--color-surface)]'
-              : 'bg-transparent'
-        "
+        v-for="stage in stages"
+        :key="stage.key"
+        class="relative pl-10"
       >
-        <!-- Status indicator -->
-        <div class="relative w-5 h-5 shrink-0 flex items-center justify-center">
+        <!-- Timeline dot -->
+        <div class="absolute left-[9px] top-[6px] z-10 flex h-[13px] w-[13px] items-center justify-center rounded-full border-2 border-[var(--color-surface)] bg-[var(--color-canvas)]">
           <template v-if="stage.done">
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 16 16"
-              class="text-[var(--color-success-text)]"
-            >
-              <path
-                d="M4 8l3 3 5-6"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="1.5"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              />
-            </svg>
+            <div class="h-2.5 w-2.5 rounded-full bg-[var(--color-success-text)]"></div>
           </template>
           <template v-else-if="stage.active">
-            <div
-              class="w-3 h-3 border-2 border-[var(--color-accent-text)] border-t-transparent rounded-full animate-spin"
-            />
+            <div class="h-2.5 w-2.5 rounded-full bg-[var(--color-accent)] animate-pulse"></div>
           </template>
           <template v-else>
-            <div
-              class="w-2 h-2 rounded-full bg-[var(--color-border)]"
-            />
+            <div class="h-2 w-2 rounded-full bg-[var(--color-border)]"></div>
           </template>
         </div>
 
-        <div class="min-w-0">
+        <!-- Stage header -->
+        <div class="pb-5">
           <p
             class="text-sm font-medium"
             :class="
-              stage.active
-                ? 'text-[var(--color-accent-text)]'
-                : stage.done
-                  ? 'text-[var(--color-text-primary)]'
-                  : 'text-[var(--color-text-tertiary)]'
+              stage.active ? 'text-[var(--color-accent-text)]'
+              : stage.done ? 'text-[var(--color-text-primary)]'
+              : 'text-[var(--color-text-tertiary)]'
             "
           >
-            {{ stage.label }}
+            {{ stage.done ? stage.doneLabel : stage.label }}
+            <span v-if="stage.active" class="ml-1.5 inline-block h-1 w-1 rounded-full bg-[var(--color-accent)] animate-pulse align-middle"></span>
           </p>
-          <p
-            v-if="stage.active || stage.done"
-            class="text-xs text-[var(--color-text-tertiary)]"
+
+          <!-- PLAN: sub-query cards -->
+          <div
+            v-if="stage.key === 'planning' && (stage.active || stage.done) && session.plan"
+            class="mt-3 space-y-2"
           >
-            {{ stage.description }}
-          </p>
-        </div>
-      </div>
-
-      <!-- Sub-queries (when plan exists and we're at or past planning) -->
-      <div
-        v-if="
-          (stage.key === 'searching' || stage.key === 'planning') &&
-          (stage.active || stage.done) &&
-          session.plan
-        "
-        class="ml-8 mt-1 mb-2 space-y-1"
-      >
-        <div
-          v-for="(sq, idx) in session.plan"
-          :key="idx"
-          class="animate-fade-in-up flex items-start gap-2.5 p-2.5 rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface)]"
-          :style="{ animationDelay: `${idx * 60}ms` }"
-        >
-          <!-- Sub-query status icon -->
-          <div class="mt-0.5 shrink-0">
-            <template v-if="sq.status === 'searching'">
-              <div
-                class="w-3 h-3 border-[1.5px] border-[var(--color-accent-text)] border-t-transparent rounded-full animate-spin"
-              />
-            </template>
-            <template v-else-if="sq.status === 'found'">
-              <svg
-                width="12"
-                height="12"
-                viewBox="0 0 12 12"
-                class="text-[var(--color-success-text)]"
-              >
-                <path
-                  d="M3 6l2 2 4-4.5"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="1.5"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                />
-              </svg>
-            </template>
-            <template v-else-if="sq.status === 'insufficient'">
-              <svg
-                width="12"
-                height="12"
-                viewBox="0 0 12 12"
-                class="text-[var(--color-warning-text)]"
-              >
-                <path
-                  d="M6 3v4M6 8.5v.5"
-                  stroke="currentColor"
-                  stroke-width="1.5"
-                  stroke-linecap="round"
-                />
-              </svg>
-            </template>
-            <template v-else>
-              <div
-                class="w-2 h-2 mt-0.5 rounded-full bg-[var(--color-border)]"
-              />
-            </template>
-          </div>
-
-          <div class="min-w-0">
-            <p
-              class="text-xs font-medium"
-              :class="subQueryStatusConfig[sq.status]?.classes"
+            <div
+              v-for="(sq, qi) in session.plan"
+              :key="qi"
+              class="animate-fade-in rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] p-3"
+              :style="{ animationDelay: `${qi * 60}ms` }"
             >
-              {{ sq.subQuery }}
-            </p>
-            <p class="text-[11px] text-[var(--color-text-tertiary)] mt-0.5">
-              {{ sq.rationale }}
-            </p>
+              <div class="flex items-start gap-2">
+                <span class="mt-px shrink-0 rounded bg-[var(--color-surface-sunken)] px-1.5 py-0.5 text-[10px] font-mono font-medium text-[var(--color-text-tertiary)]">
+                  Q{{ qi + 1 }}
+                </span>
+                <div class="min-w-0">
+                  <p class="text-sm font-medium text-[var(--color-text-primary)]">{{ sq.subQuery }}</p>
+                  <p class="mt-0.5 text-xs text-[var(--color-text-tertiary)]">{{ sq.rationale }}</p>
+                </div>
+              </div>
+            </div>
           </div>
-        </div>
-      </div>
 
-      <!-- Validation results -->
-      <div
-        v-if="
-          stage.key === 'validating' &&
-          (stage.active || stage.done) &&
-          session.findings
-        "
-        class="ml-8 mt-1 mb-2 space-y-1"
-      >
-        <div
-          v-for="(finding, idx) in session.findings"
-          :key="idx"
-          class="animate-fade-in-up flex items-center gap-2.5 p-2.5 rounded-lg border border-[var(--color-border-subtle)] bg-[var(--color-surface)]"
-          :style="{ animationDelay: `${idx * 60}ms` }"
-        >
-          <svg
-            v-if="finding.validated"
-            width="12"
-            height="12"
-            viewBox="0 0 12 12"
-            class="text-[var(--color-success-text)] shrink-0"
+          <!-- SEARCH: sub-queries with passages -->
+          <div
+            v-if="stage.key === 'searching' && (stage.active || stage.done) && session.plan"
+            class="mt-3 space-y-2"
           >
-            <path
-              d="M3 6l2 2 4-4.5"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="1.5"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
-          </svg>
-          <svg
-            v-else
-            width="12"
-            height="12"
-            viewBox="0 0 12 12"
-            class="text-[var(--color-warning-text)] shrink-0"
+            <div
+              v-for="(sq, qi) in session.plan"
+              :key="qi"
+              class="animate-fade-in rounded-lg border border-[var(--color-border)] bg-[var(--color-surface)] overflow-hidden"
+              :style="{ animationDelay: `${qi * 60}ms` }"
+            >
+              <!-- Sub-query row -->
+              <button
+                @click="togglePassages(qi)"
+                class="flex w-full items-center justify-between gap-3 px-3 py-2.5 text-left hover:bg-[var(--color-surface-sunken)] transition-colors"
+              >
+                <div class="flex items-center gap-2 min-w-0">
+                  <!-- Status icon -->
+                  <div v-if="sq.status === 'searching'" class="h-3 w-3 shrink-0 rounded-full border-[1.5px] border-[var(--color-accent)] border-t-transparent animate-spin" />
+                  <svg v-else-if="sq.status === 'found'" width="14" height="14" viewBox="0 0 14 14" class="shrink-0 text-[var(--color-success-text)]">
+                    <path d="M4 7l2.5 2.5L10 5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                  <svg v-else-if="sq.status === 'insufficient'" width="14" height="14" viewBox="0 0 14 14" class="shrink-0 text-[var(--color-warning-text)]">
+                    <path d="M7 4v4M7 10v.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+                  </svg>
+                  <div v-else class="h-2 w-2 shrink-0 rounded-full bg-[var(--color-border)]" />
+
+                  <p class="truncate text-sm text-[var(--color-text-primary)]">{{ sq.subQuery }}</p>
+                </div>
+
+                <!-- Passage count + chevron -->
+                <div class="flex shrink-0 items-center gap-1.5">
+                  <span
+                    v-if="session.findings && session.findings[qi]"
+                    class="text-[11px] text-[var(--color-text-tertiary)]"
+                  >
+                    {{ session.findings[qi].passages.length }} passages
+                  </span>
+                  <svg width="12" height="12" viewBox="0 0 12 12" class="text-[var(--color-text-tertiary)] transition-transform duration-200" :class="expandedPassages[qi] ? 'rotate-180' : ''">
+                    <path d="M3 5l3 3 3-3" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" />
+                  </svg>
+                </div>
+              </button>
+
+              <!-- Expanded passages -->
+              <div
+                v-if="expandedPassages[qi] && session.findings && session.findings[qi]"
+                class="border-t border-[var(--color-border)] bg-[var(--color-canvas)]"
+              >
+                <div
+                  v-for="(p, pi) in session.findings[qi].passages"
+                  :key="pi"
+                  class="flex gap-3 border-b border-[var(--color-border)] px-3 py-2.5 last:border-b-0"
+                >
+                  <div class="shrink-0 pt-0.5">
+                    <div
+                      class="h-1.5 w-8 rounded-full bg-[var(--color-border)] overflow-hidden"
+                    >
+                      <div
+                        class="h-full rounded-full bg-[var(--color-success-text)]"
+                        :style="{ width: `${scorePercent(p.score)}%` }"
+                      ></div>
+                    </div>
+                    <p class="mt-0.5 text-center text-[9px] font-mono text-[var(--color-text-tertiary)]">{{ scorePercent(p.score) }}%</p>
+                  </div>
+                  <div class="min-w-0">
+                    <p class="text-[11px] font-medium text-[var(--color-accent-text)]">{{ p.documentName }}</p>
+                    <p class="mt-0.5 text-xs leading-relaxed text-[var(--color-text-secondary)] line-clamp-3">{{ p.content }}</p>
+                  </div>
+                </div>
+
+                <div v-if="session.findings[qi].passages.length === 0" class="px-3 py-3 text-xs text-[var(--color-text-tertiary)] text-center">
+                  No passages retrieved
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- VALIDATE: summary badges -->
+          <div
+            v-if="stage.key === 'validating' && (stage.active || stage.done) && session.findings"
+            class="mt-3 flex flex-wrap gap-2"
           >
-            <path
-              d="M6 3v4M6 8.5v.5"
-              stroke="currentColor"
-              stroke-width="1.5"
-              stroke-linecap="round"
-            />
-          </svg>
-          <span class="text-xs text-[var(--color-text-secondary)]">
-            {{ finding.subQuery }}
-            <span class="text-[var(--color-text-tertiary)]">
-              -- {{ finding.passages.length }} passage{{
-                finding.passages.length !== 1 ? "s" : ""
-              }}
-              {{ finding.validated ? "verified" : "insufficient" }}
-            </span>
-          </span>
+            <div
+              v-for="(f, fi) in session.findings"
+              :key="fi"
+              class="animate-fade-in inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium"
+              :class="f.validated
+                ? 'border-[var(--color-success-text)]/20 bg-[var(--color-success)] text-[var(--color-success-text)]'
+                : 'border-[var(--color-warning-text)]/20 bg-[var(--color-warning)] text-[var(--color-warning-text)]'
+              "
+              :style="{ animationDelay: `${fi * 50}ms` }"
+            >
+              <svg v-if="f.validated" width="10" height="10" viewBox="0 0 10 10"><path d="M2.5 5l2 2 3-3.5" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" /></svg>
+              <svg v-else width="10" height="10" viewBox="0 0 10 10"><path d="M5 2.5v3M5 7v.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" /></svg>
+              Q{{ fi + 1 }}: {{ f.passages.length }} passage{{ f.passages.length !== 1 ? 's' : '' }}
+              {{ f.validated ? 'verified' : 'insufficient' }}
+            </div>
+          </div>
         </div>
       </div>
     </div>

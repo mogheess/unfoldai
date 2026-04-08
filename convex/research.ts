@@ -3,17 +3,19 @@
 import { v } from "convex/values";
 import { action } from "./_generated/server";
 import { api } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import OpenAI from "openai";
 
 export const startResearch = action({
   args: { question: v.string() },
   returns: v.id("researchSessions"),
-  handler: async (ctx, args) => {
+  handler: async (ctx, args): Promise<Id<"researchSessions">> => {
     const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-    const sessionId = await ctx.runMutation(api.researchSessions.create, {
-      question: args.question,
-    });
+    const sessionId = await ctx.runMutation(
+      api.researchSessions.create,
+      { question: args.question }
+    );
 
     try {
       // --- Step 1: Plan ---
@@ -39,7 +41,20 @@ export const startResearch = action({
         status: "searching",
       });
 
-      const allFindings = [];
+      type Passage = {
+        content: string;
+        documentName: string;
+        documentId: Id<"documents">;
+        chunkIndex: number;
+        score: number;
+      };
+      type Finding = {
+        subQuery: string;
+        passages: Passage[];
+        validated: boolean;
+      };
+
+      const allFindings: Finding[] = [];
 
       for (let i = 0; i < plan.length; i++) {
         const subQuery = plan[i];
@@ -56,7 +71,7 @@ export const startResearch = action({
           limit: 6,
         });
 
-        const passages = [];
+        const passages: Passage[] = [];
         for (const result of results) {
           const chunk = await ctx.runQuery(api.researchSessions.getChunk, {
             chunkId: result._id,
@@ -182,7 +197,7 @@ async function validateFindings(
     passages: Array<{
       content: string;
       documentName: string;
-      documentId: string;
+      documentId: Id<"documents">;
       chunkIndex: number;
       score: number;
     }>;
@@ -214,7 +229,8 @@ Return JSON: { "validations": [{ "index": 0, "validated": true/false, "reason": 
     const v = validations.find(
       (val: { index: number; validated: boolean }) => val.index === i
     );
-    return { ...f, validated: v?.validated ?? f.passages.length > 0 };
+    const validated: boolean = v?.validated ?? f.passages.length > 0;
+    return { ...f, validated };
   });
 }
 
@@ -226,7 +242,7 @@ async function synthesize(
     passages: Array<{
       content: string;
       documentName: string;
-      documentId: string;
+      documentId: Id<"documents">;
       chunkIndex: number;
       score: number;
     }>;
@@ -236,7 +252,7 @@ async function synthesize(
   answer: string;
   sources: Array<{
     documentName: string;
-    documentId: string;
+    documentId: Id<"documents">;
     excerpt: string;
     relevance: string;
   }>;
@@ -277,8 +293,16 @@ Return JSON:
   });
 
   const parsed = JSON.parse(response.choices[0].message.content || "{}");
+  const sources = (parsed.sources || []).map(
+    (s: { documentName: string; documentId: string; excerpt: string; relevance: string }) => ({
+      documentName: s.documentName,
+      documentId: s.documentId as Id<"documents">,
+      excerpt: s.excerpt,
+      relevance: s.relevance,
+    })
+  );
   return {
     answer: parsed.answer || "Unable to synthesize an answer from available sources.",
-    sources: parsed.sources || [],
+    sources,
   };
 }

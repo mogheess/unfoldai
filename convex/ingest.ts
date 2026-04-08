@@ -98,9 +98,10 @@ export const parsePdf = action({
     const blob = await ctx.storage.get(args.storageId);
     if (!blob) throw new Error("File not found in storage");
 
-    const buffer = Buffer.from(await blob.arrayBuffer());
-    const pdfParse = (await import("pdf-parse")).default;
-    const data = await pdfParse(buffer);
-    return data.text;
+    const arrayBuffer = await blob.arrayBuffer();
+    const { PDFParse } = await import("pdf-parse");
+    const pdf = new PDFParse({ data: new Uint8Array(arrayBuffer) });
+    const result = await pdf.getText();
+    return result.text;
   },
 });
