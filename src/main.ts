@@ -1,0 +1,12 @@
+import { createApp } from "vue";
+import { convexVue } from "convex-vue";
+import App from "./App.vue";
+import "./style.css";
+
+const app = createApp(App);
+
+app.use(convexVue, {
+  url: import.meta.env.VITE_CONVEX_URL,
+});
+
+app.mount("#app");
